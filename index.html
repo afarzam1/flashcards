@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f7f7f2" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Flashcards" />
+
+  <title>Flashcards</title>
+
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="icon" href="./icons/icon-192.png" />
+
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">STUDY</p>
+        <h1>Flashcards</h1>
+      </div>
+      <div id="cardCount" class="count-badge" aria-live="polite">0 cards</div>
+    </header>
+
+    <nav class="tabs" aria-label="Main navigation">
+      <button class="tab active" data-view="study" type="button">Study</button>
+      <button class="tab" data-view="cards" type="button">Cards</button>
+    </nav>
+
+    <section id="studyView" class="view active" aria-labelledby="studyHeading">
+      <h2 id="studyHeading" class="sr-only">Study flashcards</h2>
+
+      <div id="emptyStudy" class="empty-state hidden">
+        <div class="empty-icon" aria-hidden="true">＋</div>
+        <h2>No flashcards yet</h2>
+        <p>Create your first card, then come back here to study.</p>
+        <button id="emptyAddButton" class="primary-button" type="button">Create a flashcard</button>
+      </div>
+
+      <div id="studyArea" class="study-area hidden">
+        <p id="tapHint" class="tap-hint">Tap the card to reveal the answer</p>
+
+        <button id="flashcard" class="flashcard" type="button" aria-live="polite" aria-label="Flashcard. Tap to reveal answer.">
+          <span class="card-label" id="cardSideLabel">PROMPT</span>
+          <span class="card-text" id="cardText"></span>
+          <span class="card-action" id="cardAction">Tap to reveal</span>
+        </button>
+
+        <button id="nextButton" class="primary-button next-button" type="button">
+          Next random card
+        </button>
+      </div>
+    </section>
+
+    <section id="cardsView" class="view" aria-labelledby="cardsHeading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">YOUR LIBRARY</p>
+          <h2 id="cardsHeading">Flashcards</h2>
+        </div>
+        <button id="showFormButton" class="small-button" type="button">＋ Add</button>
+      </div>
+
+      <form id="cardForm" class="card-form hidden">
+        <input id="editId" type="hidden" />
+
+        <label for="promptInput">Prompt</label>
+        <textarea id="promptInput" rows="3" maxlength="500" placeholder="e.g. cerca de" required></textarea>
+
+        <label for="answerInput">Answer</label>
+        <textarea id="answerInput" rows="4" maxlength="1000" placeholder="e.g. near / close to" required></textarea>
+
+        <div class="form-actions">
+          <button id="cancelButton" class="secondary-button" type="button">Cancel</button>
+          <button id="saveButton" class="primary-button" type="submit">Save card</button>
+        </div>
+      </form>
+
+      <div id="emptyLibrary" class="empty-state compact hidden">
+        <h3>No cards saved</h3>
+        <p>Add a prompt and answer to create your first flashcard.</p>
+      </div>
+
+      <div id="cardList" class="card-list"></div>
+    </section>
+  </main>
+
+  <template id="cardItemTemplate">
+    <article class="library-card">
+      <div class="library-copy">
+        <p class="library-prompt"></p>
+        <p class="library-answer"></p>
+      </div>
+      <div class="library-actions">
+        <button class="icon-button edit-button" type="button" aria-label="Edit flashcard">Edit</button>
+        <button class="icon-button danger delete-button" type="button" aria-label="Delete flashcard">Delete</button>
+      </div>
+    </article>
+  </template>
+
+  <script src="./app.js"></script>
+</body>
+</html>
