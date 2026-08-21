@@ -2,6 +2,13 @@
 
 A minimal, installable flashcard app designed for iPhone Safari.
 
+## Cloud Sync Version
+This version uses the existing browser storage for fast/offline use and automatically synchronizes the complete flashcard collection to Cloudflare D1 through a Worker.
+
+<!-- Configured Worker URL:
+
+`https://flashcards-api.ajmal-farzam.workers.dev` -->
+
 ## Files
 
 - `index.html` — app markup
@@ -10,7 +17,6 @@ A minimal, installable flashcard app designed for iPhone Safari.
 - `manifest.webmanifest` — PWA metadata
 - `service-worker.js` — offline caching
 - `icons/` — Home Screen/PWA icons
-
 
 ## What it does
 
@@ -23,39 +29,22 @@ A minimal, installable flashcard app designed for iPhone Safari.
 - Can be added to the iPhone Home Screen
 - No account, backend or database required
 
-## Important: where your cards are stored
+## Important security note
 
-Cards are saved using the browser's local storage.
+This version intentionally has no authentication. Anyone who discovers the Worker API
+can read or replace the flashcard collection. This matches the current requirements and
+can be changed later.
 
-That means:
+## Current collection size
 
-- Cards created on your iPhone stay on that iPhone/Safari installation.
-- Cards created on your computer are separate from the cards on your iPhone.
-- Clearing Safari website data, deleting the website's stored data, or some device-reset scenarios can delete the cards.
-- GitHub does not receive or store the flashcard content you create inside the app.
+This deliberately simple whole-collection sync implementation supports up to 900 cards.
+That is a practical limit of this V3 design rather than a D1 storage limit. It can be
+changed later to per-card synchronization if a larger collection is needed.
 
-A backup/import feature can be added later if desired.
-
-<!-- ## Publish with GitHub Pages
-
-1. Create a new **public** GitHub repository, for example `flashcards`.
-2. Upload all files and folders from this project to the repository root.
-3. Commit/push the files.
-4. In GitHub, open:
-   **Settings → Pages**
-5. Under **Build and deployment**, choose:
-   - **Source:** Deploy from a branch
-   - **Branch:** `main`
-   - **Folder:** `/ (root)`
-6. Save.
-7. GitHub will publish the site at a URL similar to:
-   `https://YOUR-USERNAME.github.io/flashcards/`
-
-The project uses relative paths, so it works correctly from a GitHub Pages project subdirectory. -->
 
 ## Install it on iPhone
 
-1. Open the GitHub Pages URL in **Safari** on your iPhone.
+1. Open the [GitHub Pages URL ](https://afarzam1.github.io/flashcards/) in **Safari** on your iPhone.
 2. Tap the **Share** button.
 3. Choose **Add to Home Screen**.
 4. Tap **Add**.

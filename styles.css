@@ -385,3 +385,33 @@ button {
     justify-content: flex-end;
   }
 }
+
+
+.topbar-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+}
+
+.sync-status {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.sync-status.synced::before {
+  content: "✓ ";
+}
+
+.sync-status.offline::before {
+  content: "○ ";
+}
+
+.sync-status.error::before {
+  content: "! ";
+}
+
+.sync-status.syncing::before {
+  content: "↻ ";
+}

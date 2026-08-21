@@ -1,9 +1,13 @@
 const STORAGE_KEY = "flashcards.v1";
+const PENDING_KEY = "flashcards.cloudPending.v1";
+const API_URL = "https://flashcards-api.ajmal-farzam.workers.dev";
 
 const state = {
   cards: loadCards(),
   currentId: null,
   revealed: false,
+  syncInFlight: false,
+  syncRequested: false,
 };
 
 const elements = {
@@ -13,6 +17,7 @@ const elements = {
     cards: document.getElementById("cardsView"),
   },
   cardCount: document.getElementById("cardCount"),
+  syncStatus: document.getElementById("syncStatus"),
   emptyStudy: document.getElementById("emptyStudy"),
   studyArea: document.getElementById("studyArea"),
   flashcard: document.getElementById("flashcard"),
@@ -33,24 +38,52 @@ const elements = {
   cardItemTemplate: document.getElementById("cardItemTemplate"),
 };
 
+function normaliseCard(card) {
+  const createdAt = card.createdAt || card.created_at || new Date().toISOString();
+  return {
+    id: String(card.id),
+    prompt: String(card.prompt),
+    answer: String(card.answer),
+    createdAt,
+    updatedAt: card.updatedAt || card.updated_at || createdAt,
+  };
+}
+
 function loadCards() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) return [];
     const parsed = JSON.parse(saved);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map(normaliseCard) : [];
   } catch {
     return [];
   }
 }
 
-function saveCards() {
+function saveCardsLocally() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.cards));
+}
+
+function hasPendingChanges() {
+  return localStorage.getItem(PENDING_KEY) === "1";
+}
+
+function setPendingChanges(pending) {
+  if (pending) {
+    localStorage.setItem(PENDING_KEY, "1");
+  } else {
+    localStorage.removeItem(PENDING_KEY);
+  }
 }
 
 function makeId() {
   if (crypto.randomUUID) return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function setSyncStatus(message, status = "syncing") {
+  elements.syncStatus.textContent = message;
+  elements.syncStatus.className = `sync-status ${status}`;
 }
 
 function switchView(viewName) {
@@ -164,6 +197,12 @@ function renderLibrary() {
   });
 }
 
+function renderAll() {
+  ensureCurrentCard();
+  renderStudy();
+  renderLibrary();
+}
+
 function openForm(card = null) {
   elements.cardForm.classList.remove("hidden");
 
@@ -189,6 +228,17 @@ function closeForm() {
   elements.saveButton.textContent = "Save card";
 }
 
+function markChangedAndSync() {
+  saveCardsLocally();
+  setPendingChanges(true);
+
+  if (navigator.onLine) {
+    queueCloudSync();
+  } else {
+    setSyncStatus("Offline — changes pending", "offline");
+  }
+}
+
 function submitCard(event) {
   event.preventDefault();
 
@@ -198,27 +248,32 @@ function submitCard(event) {
 
   if (!prompt || !answer) return;
 
+  const now = new Date().toISOString();
+
   if (editId) {
     const card = state.cards.find((item) => item.id === editId);
     if (card) {
       card.prompt = prompt;
       card.answer = answer;
+      card.updatedAt = now;
     }
   } else {
     state.cards.push({
       id: makeId(),
       prompt,
       answer,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     });
   }
 
-  saveCards();
+  markChangedAndSync();
   closeForm();
   renderLibrary();
 
   if (!state.currentId) {
     pickRandomCard();
+    renderStudy();
   }
 }
 
@@ -236,9 +291,160 @@ function deleteCard(id) {
     state.revealed = false;
   }
 
-  saveCards();
-  renderLibrary();
-  renderStudy();
+  markChangedAndSync();
+  renderAll();
+}
+
+async function fetchCloudCards() {
+  const response = await fetch(`${API_URL}/cards`, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Cloud read failed (${response.status})`);
+  }
+
+  const body = await response.json();
+  if (!body || !Array.isArray(body.cards)) {
+    throw new Error("Cloud returned an invalid cards response");
+  }
+
+  return body.cards.map(normaliseCard);
+}
+
+async function replaceCloudCards(cards) {
+  const response = await fetch(`${API_URL}/cards`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({ cards }),
+  });
+
+  if (!response.ok) {
+    let message = `Cloud write failed (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body?.error) message = body.error;
+    } catch {
+      // Ignore JSON parsing errors and use the HTTP status message.
+    }
+    throw new Error(message);
+  }
+
+  return response.json();
+}
+
+async function queueCloudSync() {
+  state.syncRequested = true;
+
+  if (state.syncInFlight) return;
+
+  state.syncInFlight = true;
+
+  try {
+    while (state.syncRequested || hasPendingChanges()) {
+      if (!navigator.onLine) {
+        setSyncStatus("Offline — changes pending", "offline");
+        break;
+      }
+
+      state.syncRequested = false;
+      setSyncStatus("Syncing…", "syncing");
+
+      const snapshot = state.cards.map((card) => ({ ...card }));
+      const snapshotJson = JSON.stringify(snapshot);
+
+      await replaceCloudCards(snapshot);
+
+      if (JSON.stringify(state.cards) === snapshotJson) {
+        setPendingChanges(false);
+        setSyncStatus("Synced", "synced");
+      } else {
+        // A card changed while the previous request was in flight.
+        setPendingChanges(true);
+        state.syncRequested = true;
+      }
+    }
+  } catch (error) {
+    console.error("Cloud sync failed:", error);
+    setPendingChanges(true);
+    setSyncStatus("Cloud unavailable", navigator.onLine ? "error" : "offline");
+  } finally {
+    state.syncInFlight = false;
+  }
+}
+
+async function initialiseCloudSync() {
+  if (!navigator.onLine) {
+    setSyncStatus(
+      hasPendingChanges() ? "Offline — changes pending" : "Offline",
+      "offline"
+    );
+    return;
+  }
+
+  setSyncStatus("Connecting…", "syncing");
+
+  try {
+    // If this device already has unsynced changes, the local copy is the
+    // authoritative one until those changes have been uploaded.
+    if (hasPendingChanges()) {
+      await queueCloudSync();
+      return;
+    }
+
+    const cloudCards = await fetchCloudCards();
+
+    // V1 migration / resilience case:
+    // if D1 is empty but this browser already has local cards, upload them.
+    if (cloudCards.length === 0 && state.cards.length > 0) {
+      setPendingChanges(true);
+      await queueCloudSync();
+      return;
+    }
+
+    // Normal case, including restoration on a new/replacement phone:
+    // use the cloud copy as the authoritative dataset.
+    state.cards = cloudCards;
+    saveCardsLocally();
+    state.currentId = null;
+    state.revealed = false;
+    renderAll();
+    setSyncStatus("Synced", "synced");
+  } catch (error) {
+    console.error("Initial cloud sync failed:", error);
+    setSyncStatus("Cloud unavailable", "error");
+  }
+}
+
+async function refreshFromCloud() {
+  if (!navigator.onLine || hasPendingChanges() || state.syncInFlight) return;
+
+  try {
+    const cloudCards = await fetchCloudCards();
+
+    // Do not destroy a healthy local dataset merely because the remote
+    // database unexpectedly became empty. Repopulate D1 instead.
+    if (cloudCards.length === 0 && state.cards.length > 0) {
+      setPendingChanges(true);
+      await queueCloudSync();
+      return;
+    }
+
+    state.cards = cloudCards;
+    saveCardsLocally();
+    state.currentId = null;
+    state.revealed = false;
+    renderAll();
+    setSyncStatus("Synced", "synced");
+  } catch (error) {
+    console.error("Cloud refresh failed:", error);
+    setSyncStatus("Cloud unavailable", "error");
+  }
 }
 
 elements.tabs.forEach((tab) => {
@@ -263,10 +469,33 @@ elements.emptyAddButton.addEventListener("click", () => {
 elements.cancelButton.addEventListener("click", closeForm);
 elements.cardForm.addEventListener("submit", submitCard);
 
-renderCount();
-ensureCurrentCard();
-renderStudy();
-renderLibrary();
+window.addEventListener("online", () => {
+  if (hasPendingChanges()) {
+    queueCloudSync();
+  } else {
+    refreshFromCloud();
+  }
+});
+
+window.addEventListener("offline", () => {
+  setSyncStatus(
+    hasPendingChanges() ? "Offline — changes pending" : "Offline",
+    "offline"
+  );
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && navigator.onLine) {
+    if (hasPendingChanges()) {
+      queueCloudSync();
+    } else {
+      refreshFromCloud();
+    }
+  }
+});
+
+renderAll();
+initialiseCloudSync();
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
