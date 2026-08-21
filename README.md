@@ -2,6 +2,16 @@
 
 A minimal, installable flashcard app designed for iPhone Safari.
 
+## Files
+
+- `index.html` — app markup
+- `styles.css` — appearance and mobile layout
+- `app.js` — flashcard logic and local storage
+- `manifest.webmanifest` — PWA metadata
+- `service-worker.js` — offline caching
+- `icons/` — Home Screen/PWA icons
+
+
 ## What it does
 
 - Shows one random flashcard at a time
@@ -26,7 +36,7 @@ That means:
 
 A backup/import feature can be added later if desired.
 
-## Publish with GitHub Pages
+<!-- ## Publish with GitHub Pages
 
 1. Create a new **public** GitHub repository, for example `flashcards`.
 2. Upload all files and folders from this project to the repository root.
@@ -41,7 +51,7 @@ A backup/import feature can be added later if desired.
 7. GitHub will publish the site at a URL similar to:
    `https://YOUR-USERNAME.github.io/flashcards/`
 
-The project uses relative paths, so it works correctly from a GitHub Pages project subdirectory.
+The project uses relative paths, so it works correctly from a GitHub Pages project subdirectory. -->
 
 ## Install it on iPhone
 
@@ -52,11 +62,3 @@ The project uses relative paths, so it works correctly from a GitHub Pages proje
 
 You can then launch Flashcards from its Home Screen icon.
 
-## Files
-
-- `index.html` — app markup
-- `styles.css` — appearance and mobile layout
-- `app.js` — flashcard logic and local storage
-- `manifest.webmanifest` — PWA metadata
-- `service-worker.js` — offline caching
-- `icons/` — Home Screen/PWA icons
