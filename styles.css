@@ -415,3 +415,12 @@ button {
 .sync-status.syncing::before {
   content: "↻ ";
 }
+
+
+.form-error {
+  margin: -4px 0 14px;
+  color: var(--danger);
+  font-size: 0.86rem;
+  font-weight: 650;
+  line-height: 1.4;
+}

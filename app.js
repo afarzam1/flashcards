@@ -1,13 +1,14 @@
 const STORAGE_KEY = "flashcards.v1";
-const PENDING_KEY = "flashcards.cloudPending.v1";
+const PENDING_OPS_KEY = "flashcards.pendingOps.v2";
+const LEGACY_PENDING_KEY = "flashcards.cloudPending.v1";
 const API_URL = "https://flashcards-api.ajmal-farzam.workers.dev";
 
 const state = {
   cards: loadCards(),
+  pendingOps: loadPendingOps(),
   currentId: null,
   revealed: false,
   syncInFlight: false,
-  syncRequested: false,
 };
 
 const elements = {
@@ -31,12 +32,21 @@ const elements = {
   editId: document.getElementById("editId"),
   promptInput: document.getElementById("promptInput"),
   answerInput: document.getElementById("answerInput"),
+  formError: document.getElementById("formError"),
   cancelButton: document.getElementById("cancelButton"),
   saveButton: document.getElementById("saveButton"),
   emptyLibrary: document.getElementById("emptyLibrary"),
   cardList: document.getElementById("cardList"),
   cardItemTemplate: document.getElementById("cardItemTemplate"),
 };
+
+function normalisePrompt(value) {
+  return String(value)
+    .normalize("NFC")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLocaleLowerCase("es-ES");
+}
 
 function normaliseCard(card) {
   const createdAt = card.createdAt || card.created_at || new Date().toISOString();
@@ -64,16 +74,17 @@ function saveCardsLocally() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.cards));
 }
 
-function hasPendingChanges() {
-  return localStorage.getItem(PENDING_KEY) === "1";
+function loadPendingOps() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PENDING_OPS_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
-function setPendingChanges(pending) {
-  if (pending) {
-    localStorage.setItem(PENDING_KEY, "1");
-  } else {
-    localStorage.removeItem(PENDING_KEY);
-  }
+function savePendingOps() {
+  localStorage.setItem(PENDING_OPS_KEY, JSON.stringify(state.pendingOps));
 }
 
 function makeId() {
@@ -84,6 +95,11 @@ function makeId() {
 function setSyncStatus(message, status = "syncing") {
   elements.syncStatus.textContent = message;
   elements.syncStatus.className = `sync-status ${status}`;
+}
+
+function showFormError(message) {
+  elements.formError.textContent = message;
+  elements.formError.classList.toggle("hidden", !message);
 }
 
 function switchView(viewName) {
@@ -118,14 +134,13 @@ function pickRandomCard() {
 
   const candidates = state.cards.filter((card) => card.id !== state.currentId);
   const next = candidates[Math.floor(Math.random() * candidates.length)];
-
   state.currentId = next.id;
   state.revealed = false;
 }
 
 function ensureCurrentCard() {
-  const currentExists = state.cards.some((card) => card.id === state.currentId);
-  if (!currentExists) pickRandomCard();
+  const exists = state.cards.some((card) => card.id === state.currentId);
+  if (!exists) pickRandomCard();
 }
 
 function getCurrentCard() {
@@ -175,36 +190,43 @@ function renderStudy() {
 function renderLibrary() {
   renderCount();
   elements.cardList.innerHTML = "";
-
   elements.emptyLibrary.classList.toggle("hidden", state.cards.length > 0);
 
+  const fragment = document.createDocumentFragment();
+
   state.cards.forEach((card) => {
-    const fragment = elements.cardItemTemplate.content.cloneNode(true);
-    const article = fragment.querySelector(".library-card");
-    const prompt = fragment.querySelector(".library-prompt");
-    const answer = fragment.querySelector(".library-answer");
-    const editButton = fragment.querySelector(".edit-button");
-    const deleteButton = fragment.querySelector(".delete-button");
+    const item = elements.cardItemTemplate.content.cloneNode(true);
+    const article = item.querySelector(".library-card");
+    const prompt = item.querySelector(".library-prompt");
+    const answer = item.querySelector(".library-answer");
+    const editButton = item.querySelector(".edit-button");
+    const deleteButton = item.querySelector(".delete-button");
 
     article.dataset.id = card.id;
     prompt.textContent = card.prompt;
     answer.textContent = card.answer;
-
     editButton.addEventListener("click", () => openForm(card));
     deleteButton.addEventListener("click", () => deleteCard(card.id));
-
-    elements.cardList.appendChild(fragment);
+    fragment.appendChild(item);
   });
+
+  elements.cardList.appendChild(fragment);
 }
 
 function renderAll() {
   ensureCurrentCard();
   renderStudy();
-  renderLibrary();
+
+  // With large decks, avoid building thousands of library rows while the
+  // user is on the Study tab. The Cards tab renders them only when opened.
+  if (elements.views.cards.classList.contains("active")) {
+    renderLibrary();
+  }
 }
 
 function openForm(card = null) {
   elements.cardForm.classList.remove("hidden");
+  showFormError("");
 
   if (card) {
     elements.editId.value = card.id;
@@ -226,17 +248,26 @@ function closeForm() {
   elements.cardForm.reset();
   elements.editId.value = "";
   elements.saveButton.textContent = "Save card";
+  showFormError("");
 }
 
-function markChangedAndSync() {
-  saveCardsLocally();
-  setPendingChanges(true);
+function findDuplicatePrompt(prompt, excludingId = "") {
+  const key = normalisePrompt(prompt);
+  return state.cards.find(
+    (card) => card.id !== excludingId && normalisePrompt(card.prompt) === key
+  );
+}
 
-  if (navigator.onLine) {
-    queueCloudSync();
-  } else {
-    setSyncStatus("Offline — changes pending", "offline");
-  }
+function queueUpsert(card) {
+  state.pendingOps = state.pendingOps.filter((op) => op.id !== card.id);
+  state.pendingOps.push({ type: "upsert", id: card.id, card: { ...card } });
+  savePendingOps();
+}
+
+function queueDelete(id) {
+  state.pendingOps = state.pendingOps.filter((op) => op.id !== id);
+  state.pendingOps.push({ type: "delete", id });
+  savePendingOps();
 }
 
 function submitCard(event) {
@@ -248,131 +279,173 @@ function submitCard(event) {
 
   if (!prompt || !answer) return;
 
+  const duplicate = findDuplicatePrompt(prompt, editId);
+  if (duplicate) {
+    showFormError(`A card for “${duplicate.prompt}” already exists.`);
+    return;
+  }
+
+  showFormError("");
   const now = new Date().toISOString();
+  let changedCard;
 
   if (editId) {
     const card = state.cards.find((item) => item.id === editId);
-    if (card) {
-      card.prompt = prompt;
-      card.answer = answer;
-      card.updatedAt = now;
-    }
+    if (!card) return;
+    card.prompt = prompt;
+    card.answer = answer;
+    card.updatedAt = now;
+    changedCard = card;
   } else {
-    state.cards.push({
+    changedCard = {
       id: makeId(),
       prompt,
       answer,
       createdAt: now,
       updatedAt: now,
-    });
+    };
+    state.cards.push(changedCard);
   }
 
-  markChangedAndSync();
+  saveCardsLocally();
+  queueUpsert(changedCard);
   closeForm();
-  renderLibrary();
-
-  if (!state.currentId) {
-    pickRandomCard();
-    renderStudy();
-  }
+  renderAll();
+  flushPendingOps();
 }
 
 function deleteCard(id) {
   const card = state.cards.find((item) => item.id === id);
   if (!card) return;
 
-  const confirmed = window.confirm(`Delete "${card.prompt}"?`);
-  if (!confirmed) return;
+  if (!window.confirm(`Delete "${card.prompt}"?`)) return;
 
   state.cards = state.cards.filter((item) => item.id !== id);
-
   if (state.currentId === id) {
     state.currentId = null;
     state.revealed = false;
   }
 
-  markChangedAndSync();
+  saveCardsLocally();
+  queueDelete(id);
   renderAll();
+  flushPendingOps();
+}
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(`${API_URL}${path}`, {
+    cache: "no-store",
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+  });
+
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    // Some successful DELETE responses may have no useful body.
+  }
+
+  if (!response.ok) {
+    const error = new Error(body?.error || `Cloud request failed (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
+
+  return body;
 }
 
 async function fetchCloudCards() {
-  const response = await fetch(`${API_URL}/cards`, {
-    method: "GET",
-    headers: { Accept: "application/json" },
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    throw new Error(`Cloud read failed (${response.status})`);
-  }
-
-  const body = await response.json();
+  const body = await apiRequest("/cards", { method: "GET" });
   if (!body || !Array.isArray(body.cards)) {
     throw new Error("Cloud returned an invalid cards response");
   }
-
   return body.cards.map(normaliseCard);
 }
 
-async function replaceCloudCards(cards) {
-  const response = await fetch(`${API_URL}/cards`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
-    body: JSON.stringify({ cards }),
-  });
+async function syncOperation(op) {
+  const encodedId = encodeURIComponent(op.id);
 
-  if (!response.ok) {
-    let message = `Cloud write failed (${response.status})`;
-    try {
-      const body = await response.json();
-      if (body?.error) message = body.error;
-    } catch {
-      // Ignore JSON parsing errors and use the HTTP status message.
-    }
-    throw new Error(message);
+  if (op.type === "delete") {
+    await apiRequest(`/cards/${encodedId}`, { method: "DELETE" });
+    return;
   }
 
-  return response.json();
+  if (op.type === "upsert") {
+    await apiRequest(`/cards/${encodedId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        prompt: op.card.prompt,
+        answer: op.card.answer,
+        createdAt: op.card.createdAt,
+        updatedAt: op.card.updatedAt,
+      }),
+    });
+    return;
+  }
+
+  throw new Error("Unknown pending operation");
 }
 
-async function queueCloudSync() {
-  state.syncRequested = true;
+async function replaceLocalFromCloud() {
+  const cloudCards = await fetchCloudCards();
+  state.cards = cloudCards;
+  saveCardsLocally();
+  state.currentId = null;
+  state.revealed = false;
+  renderAll();
+}
 
+async function flushPendingOps() {
   if (state.syncInFlight) return;
+
+  if (!navigator.onLine) {
+    setSyncStatus(
+      state.pendingOps.length ? "Offline — changes pending" : "Offline",
+      "offline"
+    );
+    return;
+  }
 
   state.syncInFlight = true;
 
   try {
-    while (state.syncRequested || hasPendingChanges()) {
-      if (!navigator.onLine) {
-        setSyncStatus("Offline — changes pending", "offline");
-        break;
+    while (state.pendingOps.length) {
+      setSyncStatus(`Syncing ${state.pendingOps.length}…`, "syncing");
+      const op = state.pendingOps[0];
+
+      try {
+        await syncOperation(op);
+      } catch (error) {
+        if (error.status === 409) {
+          // The database rejected a duplicate prompt. Discard the conflicting
+          // local mutation and reload the authoritative cloud collection.
+          state.pendingOps.shift();
+          savePendingOps();
+          await replaceLocalFromCloud();
+          setSyncStatus("Duplicate card not saved", "error");
+          continue;
+        }
+        throw error;
       }
 
-      state.syncRequested = false;
-      setSyncStatus("Syncing…", "syncing");
-
-      const snapshot = state.cards.map((card) => ({ ...card }));
-      const snapshotJson = JSON.stringify(snapshot);
-
-      await replaceCloudCards(snapshot);
-
-      if (JSON.stringify(state.cards) === snapshotJson) {
-        setPendingChanges(false);
-        setSyncStatus("Synced", "synced");
-      } else {
-        // A card changed while the previous request was in flight.
-        setPendingChanges(true);
-        state.syncRequested = true;
-      }
+      state.pendingOps.shift();
+      savePendingOps();
     }
+
+    await replaceLocalFromCloud();
+    localStorage.removeItem(LEGACY_PENDING_KEY);
+    setSyncStatus("Synced", "synced");
   } catch (error) {
     console.error("Cloud sync failed:", error);
-    setPendingChanges(true);
-    setSyncStatus("Cloud unavailable", navigator.onLine ? "error" : "offline");
+    setSyncStatus(
+      navigator.onLine ? "Cloud unavailable" : "Offline — changes pending",
+      navigator.onLine ? "error" : "offline"
+    );
   } finally {
     state.syncInFlight = false;
   }
@@ -381,7 +454,7 @@ async function queueCloudSync() {
 async function initialiseCloudSync() {
   if (!navigator.onLine) {
     setSyncStatus(
-      hasPendingChanges() ? "Offline — changes pending" : "Offline",
+      state.pendingOps.length ? "Offline — changes pending" : "Offline",
       "offline"
     );
     return;
@@ -390,31 +463,15 @@ async function initialiseCloudSync() {
   setSyncStatus("Connecting…", "syncing");
 
   try {
-    // If this device already has unsynced changes, the local copy is the
-    // authoritative one until those changes have been uploaded.
-    if (hasPendingChanges()) {
-      await queueCloudSync();
-      return;
+    // Pending delta operations are always applied first. After that we reload
+    // D1 so a direct SQL import or another device is reflected locally.
+    if (state.pendingOps.length) {
+      await flushPendingOps();
+    } else {
+      await replaceLocalFromCloud();
+      localStorage.removeItem(LEGACY_PENDING_KEY);
+      setSyncStatus("Synced", "synced");
     }
-
-    const cloudCards = await fetchCloudCards();
-
-    // V1 migration / resilience case:
-    // if D1 is empty but this browser already has local cards, upload them.
-    if (cloudCards.length === 0 && state.cards.length > 0) {
-      setPendingChanges(true);
-      await queueCloudSync();
-      return;
-    }
-
-    // Normal case, including restoration on a new/replacement phone:
-    // use the cloud copy as the authoritative dataset.
-    state.cards = cloudCards;
-    saveCardsLocally();
-    state.currentId = null;
-    state.revealed = false;
-    renderAll();
-    setSyncStatus("Synced", "synced");
   } catch (error) {
     console.error("Initial cloud sync failed:", error);
     setSyncStatus("Cloud unavailable", "error");
@@ -422,24 +479,11 @@ async function initialiseCloudSync() {
 }
 
 async function refreshFromCloud() {
-  if (!navigator.onLine || hasPendingChanges() || state.syncInFlight) return;
+  if (!navigator.onLine || state.syncInFlight || state.pendingOps.length) return;
 
   try {
-    const cloudCards = await fetchCloudCards();
-
-    // Do not destroy a healthy local dataset merely because the remote
-    // database unexpectedly became empty. Repopulate D1 instead.
-    if (cloudCards.length === 0 && state.cards.length > 0) {
-      setPendingChanges(true);
-      await queueCloudSync();
-      return;
-    }
-
-    state.cards = cloudCards;
-    saveCardsLocally();
-    state.currentId = null;
-    state.revealed = false;
-    renderAll();
+    setSyncStatus("Syncing…", "syncing");
+    await replaceLocalFromCloud();
     setSyncStatus("Synced", "synced");
   } catch (error) {
     console.error("Cloud refresh failed:", error);
@@ -469,28 +513,24 @@ elements.emptyAddButton.addEventListener("click", () => {
 elements.cancelButton.addEventListener("click", closeForm);
 elements.cardForm.addEventListener("submit", submitCard);
 
+elements.promptInput.addEventListener("input", () => showFormError(""));
+
 window.addEventListener("online", () => {
-  if (hasPendingChanges()) {
-    queueCloudSync();
-  } else {
-    refreshFromCloud();
-  }
+  if (state.pendingOps.length) flushPendingOps();
+  else refreshFromCloud();
 });
 
 window.addEventListener("offline", () => {
   setSyncStatus(
-    hasPendingChanges() ? "Offline — changes pending" : "Offline",
+    state.pendingOps.length ? "Offline — changes pending" : "Offline",
     "offline"
   );
 });
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && navigator.onLine) {
-    if (hasPendingChanges()) {
-      queueCloudSync();
-    } else {
-      refreshFromCloud();
-    }
+    if (state.pendingOps.length) flushPendingOps();
+    else refreshFromCloud();
   }
 });
 
